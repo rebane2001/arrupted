@@ -124,6 +124,66 @@
     }
   };
 
+  /* 
+   * Fast CRC32 in JavaScript
+   * 101arrowz (https://github.com/101arrowz)
+   * License: MIT
+   * (https://gist.github.com/101arrowz/e58695f7ccfdf74f60ba22018093edea)
+   */
+  const crct = new Int32Array(4096);
+  for (let i = 0; i < 256; ++i) {
+    let c = i, k = 9;
+    while (--k) c = ((c & 1) && -306674912) ^ (c >>> 1);
+    crct[i] = c;
+  }
+  for (let i = 0; i < 256; ++i) {
+    let lv = crct[i];
+    for (let j = 256; j < 4096; j += 256) lv = crct[i | j] = (lv >>> 8) ^ crct[lv & 255];
+  }
+  const crcts = [];
+  for (let i = 0; i < 16;) crcts[i] = crct.subarray(i << 8, ++i << 8);
+  const [t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13, t14, t15, t16] = crcts;
+  const rawCRC = (d, c) => {
+    c = ~c;
+    let i = 0;
+    const max = d.length - 16;
+    for (; i < max;)
+      c = t16[d[i++] ^ (c & 255)] ^ t15[d[i++] ^ ((c >> 8) & 255)] ^ t14[d[i++] ^ ((c >> 16) & 255)] ^ t13[d[i++] ^ (c >>> 24)] ^ t12[d[i++]] ^ t11[d[i++]] ^ t10[d[i++]] ^ t9[d[i++]] ^ t8[d[i++]] ^ t7[d[i++]] ^ t6[d[i++]] ^ t5[d[i++]] ^ t4[d[i++]] ^ t3[d[i++]] ^ t2[d[i++]] ^ t1[d[i++]];
+    for (; i < d.length; ++i) c = t1[(c & 255) ^ d[i]] ^ (c >>> 8);
+    return ~c;
+  }
+
+  // Heal broken PNG CRCs
+  let disablePNGHeal = false;
+  function healPNG(arr) {
+    if (disablePNGHeal) return;
+    try {
+      // Check PNG header
+      if (arr[0] != 137) return;
+      if (arr[1] != 80) return;
+      if (arr[2] != 78) return;
+      if (arr[3] != 71) return;
+
+      const buff = new ArrayBuffer(4);
+      const u8 = new Uint8Array(buff);
+      const dv = new DataView(buff);
+
+      let pointer = 8;
+      while (pointer < arr.length) {
+        u8.set(arr.slice(pointer,pointer+4));
+        const chunkLen = dv.getUint32(0);
+        pointer += 4;
+        const crcRes = rawCRC(arr.slice(pointer,pointer+chunkLen+4));
+        dv.setUint32(0, crcRes);
+        pointer += chunkLen+4;
+        arr.set(u8, pointer);
+        pointer += 4;
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
   function editEntry(i) {
     const mod = modificationHistory[i];
     const newVal = prompt("Enter new value as hex (00-ff):", mod[1].toString(16).padStart(2, '0'));
@@ -142,7 +202,7 @@
     applyModifications();
   }
 
-  async function loadImage(img) {
+  async function loadImage(img, modHistory) {
     const buff = await img.arrayBuffer();
     originalFile = new Uint8Array(buff);
     currentFile = new Uint8Array(buff);
@@ -151,16 +211,20 @@
     currentCorruptedImage = currentImage;
     currentCorruptedFile = currentFile;
     overlayImg.src = currentCorruptedImage.src;
+
+    modificationHistory = modHistory ?? [];
+    currentModification = null;
+    updateDom();
   }
 
   function applyModifications() {
     const corruptedTemp = new Uint8Array(new ArrayBuffer(originalFile.byteLength));
     corruptedTemp.set(new Uint8Array(originalFile));
     for (const modification of modificationHistory ) {
-      console.log(modification)
       if (!modification[2])
         corruptedTemp[modification[0]] = modification[1];
     }
+    healPNG(corruptedTemp);
     currentCorruptedFile = corruptedTemp;
     currentCorruptedImage.src = arr2img(corruptedTemp);
     currentFile = currentCorruptedFile;
@@ -203,10 +267,10 @@
       if (currentModification) {
         currentModification = null;
         document.querySelector(".currentEntry").innerText = mod2txt(currentModification);
+        currentCorruptedImage = currentImage;
+        currentCorruptedFile = currentFile;
+        overlayImg.src = currentCorruptedImage.src;
       }
-      currentCorruptedImage = currentImage;
-      currentCorruptedFile = currentFile;
-      overlayImg.src = currentCorruptedImage.src;
       return;
     }
 
@@ -217,11 +281,13 @@
     corruptedTemp[mouseDataIndex] = randByte;
     currentModification = [mouseDataIndex, randByte, false];
     document.querySelector(".currentEntry").innerText = mod2txt(currentModification);
+    healPNG(corruptedTemp);
 
     const tempCorruptedImage = new Image();
     tempCorruptedImage.onerror = () => lastWasError = true;
     tempCorruptedImage.onload = () => {
       lastWasError = false;
+      if (currentModification == null) return;
       currentCorruptedImage = tempCorruptedImage;
       currentCorruptedFile = corruptedTemp;
       overlayImg.src = currentCorruptedImage.src;
@@ -265,8 +331,7 @@
   }
 
   function mod2txt(mod) {
-    if (!mod)
-      return "";
+    if (!mod) return "";
     return `${mod[0].toString(16).padStart(6, '0')} > ${mod[1].toString(16).padStart(2, '0')}`.replace(/f/g, "f\u200b");
   }
 
@@ -308,6 +373,7 @@
   }
 
   function render(delta) {
+    try {
     const layout = getLayout();
 
     ctx.fillStyle = "white";
@@ -361,25 +427,9 @@
       ctx.fillStyle = "red";
       ctx.fillRect(8,8,16,16);
     }
-
-    /*
-    ctx.beginPath();
-    ctx.rect(...layout.menubar);
-    ctx.rect(...layout.sidebar);
-    //ctx.fillStyle = "#564D80";
-    ctx.fillStyle = "#290033";
-    //ctx.strokeStyle = "#44344F";
-    ctx.fill();
-    //ctx.stroke();
-
-    let textLine = 1;
-    for (const modification of [...modificationHistory, currentModification] ) {
-      if (!modification) continue;
-      ctx.fillStyle = modification === currentModification ? "#FAA" : "#FFF";
-      ctx.font = "32px VT323, monospace";
-      ctx.fillText(`${modification[0].toString(16).padStart(6, '0')} -> ${modification[1].toString(16).padStart(2, '0')}`.replace(/f/g, "f\x00"), layout.sidebar[0]+8, layout.sidebar[1]+8 + 24*textLine);
-      textLine++;
-    }*/
+    } catch (e) {
+      console.error(e);
+    }
 
     if (delta !== -1)
       requestAnimationFrame(render);
