@@ -12,7 +12,7 @@
       border: 0;
       overflow: hidden;
     }
-    canvas {
+    canvas, img {
       image-rendering: pixelated;
       position: absolute;
     }
@@ -22,11 +22,15 @@
     #mainCanvas {
       z-index: 1;
     }
+    #overlayImg {
+      z-index: 2;
+    }
   </style>
 </head>
 <body>
 <canvas id="bgCanvas"></canvas>
 <canvas id="mainCanvas"></canvas>
+<img id="overlayImg" />
 <script>
   let volume = 0.35;
   const audioContext = new AudioContext();
@@ -42,6 +46,7 @@
     setTimeout(() => oscillator.stop(), l);
   }
 
+  const overlayImg = document.getElementById("overlayImg");
   const mainCanvas = document.getElementById("mainCanvas");
   const bgCanvas = document.getElementById("bgCanvas");
   let ctx = mainCanvas.getContext("2d");
@@ -71,13 +76,22 @@
     return window.URL.createObjectURL(new Blob([arr], { type: 'image/jpeg' }));
   }
 
-  async function loadImage() {
-    const resp = await fetch("image.jpg");
-    const cont = await resp.blob();
-    const buff = await cont.arrayBuffer();
+  document.body.ondragover = (ev) => ev.preventDefault();
+  document.body.ondrop = async (ev) => {
+    ev.preventDefault();
+    for (const img of (ev.dataTransfer.items) ? [...ev.dataTransfer.items].filter(item => item.kind === "file").map(item => item.getAsFile()) : [...ev.dataTransfer.files]) {
+      await loadImage(img);
+    }
+  };
+
+  async function loadImage(img) {
+    const buff = await img.arrayBuffer();
     currentFile = new Uint8Array(buff);
     currentImage = new Image();
     currentImage.src = arr2img(currentFile);
+    currentCorruptedImage = currentImage;
+    currentCorruptedFile = currentFile;
+    overlayImg.src = currentCorruptedImage.src;
   }
 
   function handleMouseClick() {
@@ -85,12 +99,10 @@
     if (!currentCorruptedFile) return;
     currentFile = currentCorruptedFile;
     currentImage = currentCorruptedImage;
+    overlayImg.src = currentCorruptedImage.src;
   }
 
-
-
-  function corrupt() {
-    if (!currentFile) return;
+  function getMouseDataIndex() {
     const touchArea = getTouchArea();
     const dataCount = currentFile.length;
     const pixelCount = touchArea[2]*touchArea[3];
@@ -101,9 +113,17 @@
     if (mouseInnerX >= 0 && mouseInnerY >= 0 && mouseInnerX < touchArea[2] && mouseInnerY < touchArea[3]) {
      mouseDataIndex = Math.floor((mouseInnerX + Math.floor(mouseInnerY/yReduce)*touchArea[2])*(dataCount/pixelCount)*yReduce);
     }
+    return mouseDataIndex;
+  }
+
+
+  function corrupt() {
+    if (!currentFile) return;
+    mouseDataIndex = getMouseDataIndex();
     if (mouseDataIndex === -1) {
       currentCorruptedImage = currentImage;
       currentCorruptedFile = currentFile;
+      overlayImg.src = currentCorruptedImage.src;
       return;
     }
 
@@ -120,6 +140,7 @@
       lastWasError = false;
       currentCorruptedImage = tempCorruptedImage;
       currentCorruptedFile = corruptedTemp;
+      overlayImg.src = currentCorruptedImage.src;
       // currentCorruptedImage.onload = () => render(-1);
     };
     tempCorruptedImage.src = arr2img(corruptedTemp);
@@ -171,7 +192,11 @@
       //ctx.drawImage(currentCorruptedImage, 0, 0, ctx.canvas.width, ctx.canvas.height);
       btx.globalAlpha = 0.02;
       btx.drawImage(currentCorruptedImage, 0, 0, ctx.canvas.width, ctx.canvas.height);
-      ctx.drawImage(currentCorruptedImage, ...layout.imagebox);
+      //ctx.drawImage(currentCorruptedImage, ...layout.imagebox);
+      overlayImg.style.left = `${layout.imagebox[0]}px`;
+      overlayImg.style.top = `${layout.imagebox[1]}px`;
+      overlayImg.style.width = `${layout.imagebox[2]}px`;
+      overlayImg.style.height = `${layout.imagebox[3]}px`;
     } else if (currentImage) {
       ctx.drawImage(currentImage, 0, 0, ctx.canvas.width, ctx.canvas.height);
     }
@@ -183,13 +208,7 @@
       //ctx.fillStyle = "#000";
       //ctx.fillRect(...touchArea);
       const myImageData = ctx.createImageData(touchArea[2], touchArea[3]);
-
-      const mouseInnerX = lastMouseX - touchArea[0];
-      const mouseInnerY = lastMouseY - touchArea[1];
-      let mouseDataIndex = -1;
-      if (mouseInnerX < touchArea[2] && mouseInnerY < touchArea[3]) {
-        mouseDataIndex = Math.floor((mouseInnerX + Math.floor(mouseInnerY/yReduce)*touchArea[2])*(dataCount/pixelCount)*yReduce);
-      }
+      const mouseDataIndex = getMouseDataIndex();
 
       const data = myImageData.data;
       for (let i = 0; i < pixelCount/yReduce; i++) {
@@ -234,7 +253,12 @@
     window.addEventListener('wheel', corrupt, false);
     resizeCanvas();
     requestAnimationFrame(render);
-    loadImage();
+    
+    (async () => {
+      const resp = await fetch("image.jpg");
+      const cont = await resp.blob();
+      loadImage(cont);
+    })()
   };
 </script>
 </body>
