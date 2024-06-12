@@ -5,7 +5,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>touch the bytes</title>
   <style>
+    @font-face {
+      font-family: 'VT323';
+      font-style: normal;
+      font-weight: 400;
+      font-display: swap;
+      src: url(VT323-latin.woff2) format('woff2');
+    }
     html, body {
+      font-variant-ligatures: none;
+      font-family: "VT323", monospace;
+      font-size: 24px;
       margin: 0;
       width: 100%;
       height: 100%;
@@ -15,6 +25,7 @@
     canvas, img {
       image-rendering: pixelated;
       position: absolute;
+      font-kerning: none;
     }
     #bgCanvas {
       filter: blur(24px);
@@ -25,28 +36,53 @@
     #overlayImg {
       z-index: 2;
     }
+    #menubar {
+      position: absolute;
+      background: #290033;
+      z-index: 2;
+      width: calc(100% - 48px);
+      height: 64px;
+      top: 24px;
+      left: 24px;
+    }
+    #sidebarDiv {
+      position: absolute;
+      background: #290033;
+      z-index: 2;
+      padding: 12px;
+      width: calc(256px - 24px);
+      height: calc(100% - 72px - 64px - 24px);
+      right: 24px;
+      bottom: 24px;
+      overflow-y: auto;
+    }
+    .historyEntry {
+      color: #FFF;
+    }
+    .currentEntry {
+      color: #FAA;
+    }
+    .historyEntry button {
+      background: none;
+      border: none;
+      padding: 0 2px;
+      font-size: inherit;
+      font-family: inherit;
+      color: inherit;
+      text-decoration: underline;
+      cursor: pointer;
+    }
   </style>
 </head>
 <body>
 <canvas id="bgCanvas"></canvas>
 <canvas id="mainCanvas"></canvas>
 <img id="overlayImg" draggable="false" />
+<div id="menubar"></div>
+<div id="sidebarDiv"></div>
 <script>
-  let volume = 0.35;
-  const audioContext = new AudioContext();
-  function beep(t, f, l, v) {
-    const vol = audioContext.createGain();
-    const oscillator = audioContext.createOscillator();
-    oscillator.type = t;
-    oscillator.frequency.value = f;
-    oscillator.connect(vol);
-    vol.connect(audioContext.destination);
-    vol.gain.value = v*volume;
-    oscillator.start();
-    setTimeout(() => oscillator.stop(), l);
-  }
-
   const overlayImg = document.getElementById("overlayImg");
+  const sidebarDiv = document.getElementById("sidebarDiv");
   const mainCanvas = document.getElementById("mainCanvas");
   const bgCanvas = document.getElementById("bgCanvas");
   let ctx = mainCanvas.getContext("2d");
@@ -88,6 +124,24 @@
     }
   };
 
+  function editEntry(i) {
+    const mod = modificationHistory[i];
+    const newVal = prompt("Enter new value as hex (00-ff):", mod[1].toString(16).padStart(2, '0'));
+    if (!newVal) return;
+    const parsedVal = parseInt(newVal.substring(Math.max(0,newVal.length-2)), 16);
+    if (isNaN(parsedVal)) return;
+    mod[1] = parsedVal;
+    applyModifications();
+  }
+  function visEntry(i) {
+    modificationHistory[i][2] = !modificationHistory[i][2];
+    applyModifications();
+  }
+  function delEntry(i) {
+    modificationHistory.splice(i, 1);
+    applyModifications();
+  }
+
   async function loadImage(img) {
     const buff = await img.arrayBuffer();
     originalFile = new Uint8Array(buff);
@@ -100,16 +154,19 @@
   }
 
   function applyModifications() {
-    const corruptedTemp = new Uint8Array(new ArrayBuffer(currentFile.byteLength));
-    corruptedTemp.set(new Uint8Array(currentFile));
+    const corruptedTemp = new Uint8Array(new ArrayBuffer(originalFile.byteLength));
+    corruptedTemp.set(new Uint8Array(originalFile));
     for (const modification of modificationHistory ) {
-      corruptedTemp[modification[0]] = modification[1];
+      console.log(modification)
+      if (!modification[2])
+        corruptedTemp[modification[0]] = modification[1];
     }
     currentCorruptedFile = corruptedTemp;
     currentCorruptedImage.src = arr2img(corruptedTemp);
     currentFile = currentCorruptedFile;
     currentImage = currentCorruptedImage;
     overlayImg.src = currentCorruptedImage.src;
+    updateDom();
   }
 
   function handleMouseClick() {
@@ -143,12 +200,13 @@
     if (!currentFile) return;
     mouseDataIndex = getMouseDataIndex();
     if (mouseDataIndex === -1) {
-      //if (currentModification) {
-        currentCorruptedImage = currentImage;
-        currentCorruptedFile = currentFile;
-        overlayImg.src = currentCorruptedImage.src;
+      if (currentModification) {
         currentModification = null;
-      //}
+        document.querySelector(".currentEntry").innerText = mod2txt(currentModification);
+      }
+      currentCorruptedImage = currentImage;
+      currentCorruptedFile = currentFile;
+      overlayImg.src = currentCorruptedImage.src;
       return;
     }
 
@@ -157,7 +215,8 @@
     // beep("square", 1000 + corruptedTemp[mouseDataIndex]*4, 1, 0.1);
     const randByte = Math.floor(Math.random()*256);
     corruptedTemp[mouseDataIndex] = randByte;
-    currentModification = [mouseDataIndex, randByte];
+    currentModification = [mouseDataIndex, randByte, false];
+    document.querySelector(".currentEntry").innerText = mod2txt(currentModification);
 
     const tempCorruptedImage = new Image();
     tempCorruptedImage.onerror = () => lastWasError = true;
@@ -176,18 +235,19 @@
     return getLayout().glitchbox;
   }
 
-  function getLayout() {
+  let imageRatio = 1;
+  function getLayout(barsOnly) {
     const p = 24; // padding
     const w = ctx.canvas.width;
     const h = ctx.canvas.height;
     const menubar = [p, p, w-p*2, 64];
     const sidebar = [w-256-p, p*2+menubar[3], 256, h-p*3-menubar[3]];
+    if (barsOnly) return { menubar, sidebar };
     const mainHeight = h - menubar[3] - p*3;
     const mainWidth = w - sidebar[2] - p*3;
     const maxImgWidth = Math.floor((mainWidth-p)*0.75);
-    let imageRatio = 1;
     if (currentImage) {
-      imageRatio = currentImage.naturalWidth/currentImage.naturalHeight || 1;
+      imageRatio = currentImage.naturalWidth/currentImage.naturalHeight || imageRatio;
     }
     const imagebox = [p, 2*p+menubar[3], Math.floor(imageRatio*mainHeight), mainHeight];
     if (imagebox[2] > maxImgWidth) {
@@ -202,6 +262,49 @@
       imagebox,
       glitchbox,
     };
+  }
+
+  function mod2txt(mod) {
+    if (!mod)
+      return "";
+    return `${mod[0].toString(16).padStart(6, '0')} > ${mod[1].toString(16).padStart(2, '0')}`.replace(/f/g, "f\u200b");
+  }
+
+  function updateDom() {
+    // const layout = getLayout(true);
+    // sidebarDiv.style.left = `${layout.sidebar[0]}px`;
+    // sidebarDiv.style.top = `${layout.sidebar[1]}px`;
+    // sidebarDiv.style.width = `${layout.sidebar[2]}px`;
+    // sidebarDiv.style.height = `${layout.sidebar[3]}px`;
+
+    sidebarDiv.innerText = "";
+
+    let i = 0;
+    for (const modification of [...modificationHistory, currentModification] ) {
+      const entry = document.createElement("div");
+      const isCurrent = modification === currentModification;
+      entry.innerText = mod2txt(modification);
+      entry.classList.add("historyEntry");
+      if (isCurrent) entry.classList.add("currentEntry");
+      if (!isCurrent) {
+        const entryIndex = i;
+        const buttons = document.createElement("span");
+        const editBtn = document.createElement("button");
+        const visBtn = document.createElement("button");
+        const delBtn = document.createElement("button");
+        editBtn.innerText = "edit";
+        editBtn.onclick = () => editEntry(entryIndex);
+        visBtn.innerText = modification[2] ? "show" : "hide";
+        visBtn.onclick = () => visEntry(entryIndex);
+        delBtn.innerText = "x";
+        delBtn.onclick = () => delEntry(entryIndex);
+        [editBtn, visBtn, delBtn].forEach(b => buttons.appendChild(b));
+        buttons.style.float = "right";
+        entry.appendChild(buttons);
+      }
+      sidebarDiv.appendChild(entry);
+      i++;
+    }
   }
 
   function render(delta) {
@@ -259,22 +362,24 @@
       ctx.fillRect(8,8,16,16);
     }
 
+    /*
     ctx.beginPath();
     ctx.rect(...layout.menubar);
     ctx.rect(...layout.sidebar);
-    ctx.fillStyle = "#564D80";
-    ctx.strokeStyle = "#44344F";
+    //ctx.fillStyle = "#564D80";
+    ctx.fillStyle = "#290033";
+    //ctx.strokeStyle = "#44344F";
     ctx.fill();
-    ctx.stroke();
+    //ctx.stroke();
 
     let textLine = 1;
     for (const modification of [...modificationHistory, currentModification] ) {
       if (!modification) continue;
       ctx.fillStyle = modification === currentModification ? "#FAA" : "#FFF";
-      ctx.font = "16px serif";
-      ctx.fillText(`${modification[0].toString(16).padStart(6, '0')} -> ${modification[1].toString(16).padStart(2, '0')}`, layout.sidebar[0], layout.sidebar[1] + 16*textLine);
+      ctx.font = "32px VT323, monospace";
+      ctx.fillText(`${modification[0].toString(16).padStart(6, '0')} -> ${modification[1].toString(16).padStart(2, '0')}`.replace(/f/g, "f\x00"), layout.sidebar[0]+8, layout.sidebar[1]+8 + 24*textLine);
       textLine++;
-    }
+    }*/
 
     if (delta !== -1)
       requestAnimationFrame(render);
@@ -286,6 +391,7 @@
     window.addEventListener('click', handleMouseClick, false);
     window.addEventListener('wheel', corrupt, false);
     resizeCanvas();
+    updateDom();
     requestAnimationFrame(render);
     
     (async () => {
