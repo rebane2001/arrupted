@@ -30,7 +30,7 @@
 <body>
 <canvas id="bgCanvas"></canvas>
 <canvas id="mainCanvas"></canvas>
-<img id="overlayImg" />
+<img id="overlayImg" draggable="false" />
 <script>
   let volume = 0.35;
   const audioContext = new AudioContext();
@@ -51,6 +51,9 @@
   const bgCanvas = document.getElementById("bgCanvas");
   let ctx = mainCanvas.getContext("2d");
   let btx = bgCanvas.getContext("2d");
+  let modificationHistory = [];
+  let currentModification = null;
+  let originalFile = null;
   let currentFile = null;
   let currentImage = null;
   let currentCorruptedFile = null;
@@ -62,6 +65,7 @@
     ctx.canvas.height = window.innerHeight;
     btx.canvas.width  = window.innerWidth;
     btx.canvas.height = window.innerHeight;
+    btx.globalAlpha = 1;
   }
 
   let lastMouseX = 0;
@@ -86,6 +90,7 @@
 
   async function loadImage(img) {
     const buff = await img.arrayBuffer();
+    originalFile = new Uint8Array(buff);
     currentFile = new Uint8Array(buff);
     currentImage = new Image();
     currentImage.src = arr2img(currentFile);
@@ -94,12 +99,29 @@
     overlayImg.src = currentCorruptedImage.src;
   }
 
-  function handleMouseClick() {
-    if (lastWasError) return;
-    if (!currentCorruptedFile) return;
+  function applyModifications() {
+    const corruptedTemp = new Uint8Array(new ArrayBuffer(currentFile.byteLength));
+    corruptedTemp.set(new Uint8Array(currentFile));
+    for (const modification of modificationHistory ) {
+      corruptedTemp[modification[0]] = modification[1];
+    }
+    currentCorruptedFile = corruptedTemp;
+    currentCorruptedImage.src = arr2img(corruptedTemp);
     currentFile = currentCorruptedFile;
     currentImage = currentCorruptedImage;
     overlayImg.src = currentCorruptedImage.src;
+  }
+
+  function handleMouseClick() {
+    mouseDataIndex = getMouseDataIndex();
+    if (mouseDataIndex >= 0 && !lastWasError && currentCorruptedFile && currentModification) {
+      modificationHistory.push(currentModification);
+      currentModification = null;
+      //currentFile = currentCorruptedFile;
+      //currentImage = currentCorruptedImage;
+      //overlayImg.src = currentCorruptedImage.src;
+      applyModifications();
+    }
   }
 
   function getMouseDataIndex() {
@@ -121,18 +143,21 @@
     if (!currentFile) return;
     mouseDataIndex = getMouseDataIndex();
     if (mouseDataIndex === -1) {
-      currentCorruptedImage = currentImage;
-      currentCorruptedFile = currentFile;
-      overlayImg.src = currentCorruptedImage.src;
+      //if (currentModification) {
+        currentCorruptedImage = currentImage;
+        currentCorruptedFile = currentFile;
+        overlayImg.src = currentCorruptedImage.src;
+        currentModification = null;
+      //}
       return;
     }
 
     const corruptedTemp = new Uint8Array(new ArrayBuffer(currentFile.byteLength));
     corruptedTemp.set(new Uint8Array(currentFile));
     // beep("square", 1000 + corruptedTemp[mouseDataIndex]*4, 1, 0.1);
-    corruptedTemp[mouseDataIndex] = Math.floor(Math.random()*256);
-
-
+    const randByte = Math.floor(Math.random()*256);
+    corruptedTemp[mouseDataIndex] = randByte;
+    currentModification = [mouseDataIndex, randByte];
 
     const tempCorruptedImage = new Image();
     tempCorruptedImage.onerror = () => lastWasError = true;
@@ -190,8 +215,8 @@
     if (currentCorruptedImage) {
       //ctx.drawImage(currentCorruptedImage, 0, 0);
       //ctx.drawImage(currentCorruptedImage, 0, 0, ctx.canvas.width, ctx.canvas.height);
-      btx.globalAlpha = 0.02;
       btx.drawImage(currentCorruptedImage, 0, 0, ctx.canvas.width, ctx.canvas.height);
+      btx.globalAlpha = 0.02;
       //ctx.drawImage(currentCorruptedImage, ...layout.imagebox);
       overlayImg.style.left = `${layout.imagebox[0]}px`;
       overlayImg.style.top = `${layout.imagebox[1]}px`;
@@ -241,6 +266,15 @@
     ctx.strokeStyle = "#44344F";
     ctx.fill();
     ctx.stroke();
+
+    let textLine = 1;
+    for (const modification of [...modificationHistory, currentModification] ) {
+      if (!modification) continue;
+      ctx.fillStyle = modification === currentModification ? "#FAA" : "#FFF";
+      ctx.font = "16px serif";
+      ctx.fillText(`${modification[0].toString(16).padStart(6, '0')} -> ${modification[1].toString(16).padStart(2, '0')}`, layout.sidebar[0], layout.sidebar[1] + 16*textLine);
+      textLine++;
+    }
 
     if (delta !== -1)
       requestAnimationFrame(render);
