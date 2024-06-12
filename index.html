@@ -21,6 +21,7 @@
       height: 100%;
       border: 0;
       overflow: hidden;
+      color: #FFF;
     }
     canvas, img {
       image-rendering: pixelated;
@@ -40,10 +41,12 @@
       position: absolute;
       background: #290033;
       z-index: 2;
-      width: calc(100% - 48px);
-      height: 64px;
+      padding: 12px;
+      width: calc(100% - 48px - 24px);
+      height: calc(48px - 24px);
       top: 24px;
       left: 24px;
+      line-height: 0;
     }
     #sidebarDiv {
       position: absolute;
@@ -51,26 +54,45 @@
       z-index: 2;
       padding: 12px;
       width: calc(256px - 24px);
-      height: calc(100% - 72px - 64px - 24px);
+      height: calc(100% - 72px - 48px - 24px);
       right: 24px;
       bottom: 24px;
       overflow-y: auto;
-    }
-    .historyEntry {
-      color: #FFF;
+      display: flex;
+      flex-direction: column;
     }
     .currentEntry {
       color: #FAA;
     }
-    .historyEntry button {
+    .historyEntry button, #menubar button {
       background: none;
       border: none;
-      padding: 0 2px;
       font-size: inherit;
       font-family: inherit;
       color: inherit;
-      text-decoration: underline;
       cursor: pointer;
+    }
+    .historyEntry button {
+      padding: 0 2px;
+      text-decoration: underline;
+    }
+    .help {
+      color: #AAA;
+      font-size: 16px;
+      margin: auto 0 0 0;
+      align-self: flex-end;
+    }
+    #menubar button {
+      padding: 0 2px;
+    }
+    h1 {
+      color: #FAA;
+      padding: 0 2px;
+      margin: 0;
+      text-transform: uppercase;
+      font-size: inherit;
+      display: inline-block;
+      font-weight: normal;
     }
   </style>
 </head>
@@ -78,7 +100,7 @@
 <canvas id="bgCanvas"></canvas>
 <canvas id="mainCanvas"></canvas>
 <img id="overlayImg" draggable="false" />
-<div id="menubar"></div>
+<div id="menubar"><h1>Arrupted</h1> <button>OPEN</button> / <button>SAVE</button> / <button>VIDEO</button> / <button>HELP</button> / <button>TUTORIAL</button> / <button>GUIDE</button> / <button>HOW-TO</button></div>
 <div id="sidebarDiv"></div>
 <script>
   const overlayImg = document.getElementById("overlayImg");
@@ -306,7 +328,7 @@
     const p = 24; // padding
     const w = ctx.canvas.width;
     const h = ctx.canvas.height;
-    const menubar = [p, p, w-p*2, 64];
+    const menubar = [p, p, w-p*2, 48];
     const sidebar = [w-256-p, p*2+menubar[3], 256, h-p*3-menubar[3]];
     if (barsOnly) return { menubar, sidebar };
     const mainHeight = h - menubar[3] - p*3;
@@ -370,6 +392,16 @@
       sidebarDiv.appendChild(entry);
       i++;
     }
+    const help = document.createElement("div");
+    help.classList.add("help");
+    help.innerText = `
+Move your mouse over the raw data to corrupt parts of the image.
+Once you find a corruption you like, click on it to apply it.
+
+Scroll - Change current corruption
+Arrow keys - Same thing
+Shift - Adjust a zoomed in part`
+    sidebarDiv.appendChild(help);
   }
 
   function render(delta) {
@@ -445,7 +477,7 @@
     requestAnimationFrame(render);
     
     (async () => {
-      const resp = await fetch("image.jpg");
+      const resp = await fetch("default.png");
       const cont = await resp.blob();
       loadImage(cont);
     })()
