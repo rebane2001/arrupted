@@ -709,7 +709,7 @@ Processing is done locally, no data is sent to the server.`;
       const data = rawImageData.data;
       const iterCount = Math.min(dataCount, pixelCount);
       const lotsOfData = dataCount > pixelCount;
-      const xReduce = lotsOfData ? 1 : Math.ceil(pixelCount/dataCount/yReduce);
+      const xReduce = lotsOfData ? 1 : (Math.floor(pixelCount/dataCount/yReduce)+1);
       for (let v = 0; v < iterCount; v++) {
         const i = Math.ceil((v/iterCount)*(pixelCount/yReduce));
         const i2 = Math.floor(i*yFactor);
