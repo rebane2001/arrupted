@@ -134,6 +134,19 @@
     corrupt();
   }
 
+  let shiftDown = false;
+  function handleKeyDown(e) {
+    if (e.key === "Shift") {
+      if (!shiftDown) {
+        calculateZoomOffset();
+        shiftDown = true;
+      }
+    }
+  }
+  function handleKeyUp(e) {
+    if (e.key === "Shift") shiftDown = false;
+  }
+
   function arr2img(arr) {
     return window.URL.createObjectURL(new Blob([arr], { type: 'image/jpeg' }));
   }
@@ -224,6 +237,28 @@
     applyModifications();
   }
 
+  let zoomOffset = 0;
+  let zoomAmount = 1;
+  function calculateZoomOffset() {
+    const mouseDataIndex = getMouseDataIndex();
+    const touchArea = getTouchArea();
+    const pixelCount = touchArea[2]*touchArea[3];
+    if (currentFile.length < 128) {
+      zoomOffset = 0;
+      zoomAmount = 1;
+      return;
+    }
+    zoomAmount = 16;
+    while (Math.floor(pixelCount/zoomAmount)*2 >= currentFile.length)
+      zoomAmount *= 2;
+    zoomOffset = 0;
+    shiftDown = true;
+    const zoomedMouseDataIndex = getMouseDataIndex();
+    const zoomedDataCount = Math.floor(pixelCount/zoomAmount);
+    zoomOffset = mouseDataIndex - zoomedMouseDataIndex;
+    zoomOffset = Math.min(Math.max(zoomOffset, 0), currentFile.length-zoomedDataCount);
+  }
+
   async function loadImage(img, modHistory) {
     const buff = await img.arrayBuffer();
     originalFile = new Uint8Array(buff);
@@ -256,7 +291,7 @@
   }
 
   function handleMouseClick() {
-    mouseDataIndex = getMouseDataIndex();
+    const mouseDataIndex = getMouseDataIndex();
     if (mouseDataIndex >= 0 && !lastWasError && currentCorruptedFile && currentModification) {
       modificationHistory.push(currentModification);
       currentModification = null;
@@ -269,14 +304,15 @@
 
   function getMouseDataIndex() {
     const touchArea = getTouchArea();
-    const dataCount = currentFile.length;
     const pixelCount = touchArea[2]*touchArea[3];
+    const dataCount = shiftDown ? Math.min(currentFile.length, Math.floor(pixelCount/zoomAmount)) : currentFile.length;
     const mouseInnerX = lastMouseX - touchArea[0];
     const mouseInnerY = lastMouseY - touchArea[1];
     const yReduce = Math.floor(Math.sqrt(pixelCount/dataCount)) || 1;
+    const yFactor = Math.floor(touchArea[3]/yReduce)/(touchArea[3]/yReduce);
     let mouseDataIndex = -1;
     if (mouseInnerX >= 0 && mouseInnerY >= 0 && mouseInnerX < touchArea[2] && mouseInnerY < touchArea[3]) {
-     mouseDataIndex = Math.floor((mouseInnerX + Math.floor(mouseInnerY/yReduce)*touchArea[2])*(dataCount/pixelCount)*yReduce);
+     mouseDataIndex = Math.floor((mouseInnerX + Math.floor((mouseInnerY+1)/yReduce*yFactor)*touchArea[2])*(dataCount/pixelCount)*yReduce/yFactor) + (shiftDown ? zoomOffset : 0);
     }
     return mouseDataIndex;
   }
@@ -284,7 +320,7 @@
 
   function corrupt() {
     if (!currentFile) return;
-    mouseDataIndex = getMouseDataIndex();
+    const mouseDataIndex = getMouseDataIndex();
     if (mouseDataIndex === -1) {
       if (currentModification) {
         currentModification = null;
@@ -358,14 +394,7 @@
   }
 
   function updateDom() {
-    // const layout = getLayout(true);
-    // sidebarDiv.style.left = `${layout.sidebar[0]}px`;
-    // sidebarDiv.style.top = `${layout.sidebar[1]}px`;
-    // sidebarDiv.style.width = `${layout.sidebar[2]}px`;
-    // sidebarDiv.style.height = `${layout.sidebar[3]}px`;
-
     sidebarDiv.innerText = "";
-
     let i = 0;
     for (const modification of [...modificationHistory, currentModification] ) {
       const entry = document.createElement("div");
@@ -428,22 +457,28 @@ Shift - Adjust a zoomed in part`
     }
     if (currentFile) {
       const touchArea = getTouchArea();
-      const dataCount = currentFile.length;
       const pixelCount = touchArea[2]*touchArea[3];
+      const dataCount = shiftDown ? Math.min(currentFile.length, Math.floor(pixelCount/zoomAmount)) : currentFile.length;
+      // const yReduce = Math.floor(Math.sqrt(pixelCount/dataCount)) || 1;
       const yReduce = Math.floor(Math.sqrt(pixelCount/dataCount)) || 1;
+      const yFactor = Math.floor(touchArea[3]/yReduce)/(touchArea[3]/yReduce);
       //ctx.fillStyle = "#000";
       //ctx.fillRect(...touchArea);
       const myImageData = ctx.createImageData(touchArea[2], touchArea[3]);
       const mouseDataIndex = getMouseDataIndex();
+      
 
       const data = myImageData.data;
-      for (let i = 0; i < pixelCount/yReduce; i++) {
-        for (let yr = 0; yr < yReduce; yr++) {
-          const pix = ((Math.floor(i/touchArea[2])*yReduce+yr)*touchArea[2] + (i%touchArea[2]))*4;
+      for (let i = 0; i < (pixelCount/yReduce); i++) {
+        for (let yr = 0; yr < yReduce/yFactor; yr++) {
+          const i2 = Math.floor(i*yFactor);
+          const x = i2%touchArea[2];
+          const y = Math.floor(i2/touchArea[2]);
+          const pix =(x+Math.floor((y*yReduce/yFactor+yr))*touchArea[2])*4;
           for (let j = 0; j < 3; j++) {
-            const dataIndex = Math.floor((i*yReduce*3+j)*(dataCount/pixelCount/3));
+            const dataIndex = Math.floor((i*yReduce*3+j)*(dataCount/pixelCount/3)) + (shiftDown ? zoomOffset : 0);
             data[pix+j] = currentFile[dataIndex];
-            if (mouseDataIndex == Math.floor((i*yReduce)*(dataCount/pixelCount))) {
+            if (mouseDataIndex == Math.floor((i*yReduce)*(dataCount/pixelCount)) + (shiftDown ? zoomOffset : 0)) {
               data[pix] = 255;
               data[pix+1] = 0;
             }
@@ -471,6 +506,8 @@ Shift - Adjust a zoomed in part`
     window.addEventListener('resize', resizeCanvas, false);
     window.addEventListener('mousemove', handleMouseMove, false);
     window.addEventListener('click', handleMouseClick, false);
+    window.addEventListener('keydown', handleKeyDown, false);
+    window.addEventListener('keyup', handleKeyUp, false);
     window.addEventListener('wheel', corrupt, false);
     resizeCanvas();
     updateDom();
