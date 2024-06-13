@@ -47,6 +47,11 @@
       top: 24px;
       left: 24px;
       line-height: 0;
+      display: flex;
+      align-items: center;
+      column-gap: 10px;
+      cursor: default;
+      user-select: none;
     }
     #sidebarDiv {
       position: absolute;
@@ -85,6 +90,11 @@
     #menubar button {
       padding: 0 2px;
     }
+    #menubar a {
+      color: inherit;
+      text-decoration: inherit;
+      cursor: pointer;
+    }
     h1 {
       color: #FAA;
       padding: 0 2px;
@@ -94,15 +104,31 @@
       display: inline-block;
       font-weight: normal;
     }
+    #status {
+      margin-left: auto;
+      text-transform: uppercase;
+    }
+    #imgInput {
+      display: none;
+    }
   </style>
 </head>
 <body>
 <canvas id="bgCanvas"></canvas>
 <canvas id="mainCanvas"></canvas>
 <img id="overlayImg" draggable="false" />
-<div id="menubar"><h1>Arrupted</h1> <button>OPEN</button> / <button>SAVE</button> / <button>VIDEO</button> / <button>HELP</button> / <button>TUTORIAL</button> / <button>GUIDE</button> / <button>HOW-TO</button></div>
+<div id="menubar"><h1>Arrupted</h1>
+  <button onclick="imgInput.click()" onmouseenter="setStatus(`Open an image or project`)" onmouseleave="clearStatus()">OPEN</button>/
+  <button onclick="saveImage()" onmouseenter="setStatus(`Save an image`)" onmouseleave="clearStatus()">SAVE</button>/
+  <button onclick="saveProj()" onmouseenter="setStatus(`Save a project`)" onmouseleave="clearStatus()">PROJ</button>/
+  <button onclick="saveImage()" onmouseenter="setStatus(`Save an image`)" onmouseleave="clearStatus()">LP</button>/
+  <button>VIDEO</button>/
+  <a href="https://www.youtube.com/watch?v=FFFFFFFFFFF">VIDEO</a>
+  <span id="status"></span></div>
 <div id="sidebarDiv"></div>
+<input id="imgInput" type="file" />
 <script>
+  const status = document.getElementById("status");
   const overlayImg = document.getElementById("overlayImg");
   const sidebarDiv = document.getElementById("sidebarDiv");
   const mainCanvas = document.getElementById("mainCanvas");
@@ -117,6 +143,10 @@
   let currentCorruptedFile = null;
   let currentCorruptedImage = null;
   let lastWasError = false;
+  let errorStack = [0];
+  let errorStackIndex = 0;
+  let errorStackPos = -1;
+  let lastEditIndex = -1;
 
   function resizeCanvas() {
     ctx.canvas.width  = window.innerWidth;
@@ -131,24 +161,43 @@
   function handleMouseMove(e) {
     lastMouseX = e.clientX;
     lastMouseY = e.clientY;
-    corrupt();
+    corrupt(1);
+  }
+
+  function handleMouseWheel(e) {
+    corrupt(e.deltaY < 0 ? 1 : -1);
   }
 
   let shiftDown = false;
   function handleKeyDown(e) {
-    if (e.key === "Shift") {
-      if (!shiftDown) {
-        calculateZoomOffset();
-        shiftDown = true;
-      }
+    switch(e.key) {
+      case "ArrowLeft":
+      case "ArrowDown":
+        if (lastEditIndex !== -1) editEntryScroll(lastEditIndex, -1*(shiftDown ? 4 : 1))
+        else corrupt(-1);
+        break;
+      case "ArrowRight":
+      case "ArrowUp":
+        if (lastEditIndex !== -1) editEntryScroll(lastEditIndex, 1*(shiftDown ? 4 : 1))
+        else corrupt(1);
+        break;
+      case "Shift":
+        if (!shiftDown) {
+          calculateZoomOffset();
+          shiftDown = true;
+        }
+        break;
     }
   }
   function handleKeyUp(e) {
-    if (e.key === "Shift") shiftDown = false;
+    if (e.key === "Shift") { 
+      shiftDown = false;
+      zoomProgress = 0;
+    }
   }
 
   function arr2img(arr) {
-    return window.URL.createObjectURL(new Blob([arr], { type: 'image/jpeg' }));
+    return window.URL.createObjectURL(new Blob([arr], { type: imageMime }));
   }
 
   document.body.ondragover = (ev) => ev.preventDefault();
@@ -158,6 +207,13 @@
       await loadImage(img);
     }
   };
+  imgInput.addEventListener("change", async () => {
+    if (imgInput.files.length >= 1) {
+      for (const img of imgInput.files) {
+        loadImage(img);
+      }
+    }
+  });
 
   /* 
    * Fast CRC32 in JavaScript
@@ -190,6 +246,7 @@
 
   // Heal broken PNG CRCs
   let disablePNGHeal = false;
+  let fileChunks = [];
   function healPNG(arr) {
     if (disablePNGHeal) return;
     try {
@@ -203,29 +260,119 @@
       const u8 = new Uint8Array(buff);
       const dv = new DataView(buff);
 
+      fileChunks = [];
       let pointer = 8;
       while (pointer < arr.length) {
+        fileChunks.push(pointer);
+        fileChunks.push(pointer+1);
+        fileChunks.push(pointer+2);
+        fileChunks.push(pointer+3);
+        fileChunks.push(pointer+4);
+        fileChunks.push(pointer+5);
+        fileChunks.push(pointer+6);
+        fileChunks.push(pointer+7);
         u8.set(arr.slice(pointer,pointer+4));
         const chunkLen = dv.getUint32(0);
         pointer += 4;
+        if (pointer+chunkLen+4 >= arr.length) break;
         const crcRes = rawCRC(arr.slice(pointer,pointer+chunkLen+4));
         dv.setUint32(0, crcRes);
         pointer += chunkLen+4;
+        fileChunks.push(pointer);
+        fileChunks.push(pointer+1);
+        fileChunks.push(pointer+2);
+        fileChunks.push(pointer+3);
         arr.set(u8, pointer);
         pointer += 4;
       }
+      return true;
     } catch (e) {
       console.error(e);
     }
   }
+  function collectJPEGChunks(arr) {
+    try {
+      // Check JPEG header
+      if (arr[0] != 0xFF) return;
+      if (arr[1] != 0xD8) return;
+
+      fileChunks = [];
+      let pointer = 2;
+      while (pointer < arr.length) {
+        fileChunks.push(pointer);
+        fileChunks.push(pointer+1);
+        if (arr[pointer] != 0xFF) break;
+        if (arr[pointer+1] == 0xDA) break;
+        fileChunks.push(pointer+2);
+        fileChunks.push(pointer+3);
+        pointer += 2 + (arr[pointer+2]<<8) + arr[pointer+3];
+      }
+      return true;
+    } catch (e) {
+      console.error(e);
+    }
+  }
+  function collectRIFFChunks(arr) {
+    try {
+      // Check RIFF header
+      if (arr[0] != 0x52) return;
+      if (arr[1] != 0x49) return;
+      if (arr[2] != 0x46) return;
+      if (arr[3] != 0x46) return;
+
+      const buff = new ArrayBuffer(4);
+      const u8 = new Uint8Array(buff);
+      const u32 = new Uint32Array(buff);
+      const dv = new DataView(buff);
+
+      fileChunks = [];
+      let pointer = 0;
+      let riffStack = [];
+      while (pointer < arr.length) {
+        for (let i = 0; i < 4; i++) {
+          const b = arr[pointer+i];
+          if (b < 0x20 || b > 0x7e) {
+            if (!riffStack.length) return true;
+            pointer = riffStack.pop();
+            break;
+          }
+        }
+        const isRiffOrList = (arr[pointer] == 0x52 && arr[pointer+1] == 0x49 && arr[pointer+2] == 0x46 && arr[pointer+3] == 0x46) || (arr[pointer] == 0x4C && arr[pointer+1] == 0x49 && arr[pointer+2] == 0x53 && arr[pointer+3] == 0x54);
+        // console.log(String.fromCharCode(arr[pointer+0])+String.fromCharCode(arr[pointer+1])+String.fromCharCode(arr[pointer+2])+String.fromCharCode(arr[pointer+3]));
+        for (let i = 0; i < 8; i++) {
+          fileChunks.push(pointer+i);
+        }
+        pointer += 4;
+        u8.set(arr.slice(pointer,pointer+4));
+        pointer += 4;
+        if (isRiffOrList) {
+          riffStack.push(pointer+u32[0]);
+          pointer += 4;
+        } else {
+          pointer += u32[0];
+        }
+        while (pointer > riffStack.at(-1)) pointer = riffStack.pop();
+      }
+      return true;
+    } catch (e) {
+      console.error(e);
+    }
+  }
+  function processImageFormat(arr) {
+    return healPNG(arr) || collectJPEGChunks(arr) || collectRIFFChunks(arr);
+  }
 
   function editEntry(i) {
     const mod = modificationHistory[i];
-    const newVal = prompt("Enter new value as hex (00-ff):", mod[1].toString(16).padStart(2, '0'));
+    const newVal = prompt("😎 Pro tip! Scroll or press arrows on the edit button instead.\nEnter new value as hex (00-ff):", mod[1].toString(16).padStart(2, '0'));
     if (!newVal) return;
     const parsedVal = parseInt(newVal.substring(Math.max(0,newVal.length-2)), 16);
     if (isNaN(parsedVal)) return;
     mod[1] = parsedVal;
+    applyModifications();
+  }
+  function editEntryScroll(i, dir) {
+    modificationHistory[i][1] = (modificationHistory[i][1] + dir + 256) % 256;
     applyModifications();
   }
   function visEntry(i) {
@@ -239,6 +386,7 @@
 
   let zoomOffset = 0;
   let zoomAmount = 1;
+  let zoomProgress = 1;
   function calculateZoomOffset() {
     const mouseDataIndex = getMouseDataIndex();
     const touchArea = getTouchArea();
@@ -257,21 +405,84 @@
     const zoomedDataCount = Math.floor(pixelCount/zoomAmount);
     zoomOffset = mouseDataIndex - zoomedMouseDataIndex;
     zoomOffset = Math.min(Math.max(zoomOffset, 0), currentFile.length-zoomedDataCount);
+    zoomProgress = 0;
   }
 
-  async function loadImage(img, modHistory) {
+  function setStatus(text, color) {
+    status.innerText = text;
+    status.style.color = color ?? "#FFF";
+  }
+
+  function clearStatus() {
+    status.innerText = "";
+  }
+
+  let imageMime = "image/jpeg";
+  let imageFilename = "arrupted.jpg";
+  async function loadImage(img) {
+    if (img?.name?.endsWith(".arrupt")) {
+      loadProj(img);
+      return;
+    }
+    imageFilename = img?.name ? `arrupted_${img.name}` : "arrupted.jpg"
+    imageMime = img?.type?.includes("image/") ? img.type : "image/jpeg";
+    setStatus(img?.type ? `wowie, a ${img.type.replace('image/','')}!` : `let's go!`);
+    fileChunks = [];
     const buff = await img.arrayBuffer();
     originalFile = new Uint8Array(buff);
     currentFile = new Uint8Array(buff);
+    processImageFormat(currentFile);
     currentImage = new Image();
     currentImage.src = arr2img(currentFile);
     currentCorruptedImage = currentImage;
     currentCorruptedFile = currentFile;
     overlayImg.src = currentCorruptedImage.src;
+    
 
-    modificationHistory = modHistory ?? [];
+    modificationHistory = [];
     currentModification = null;
     updateDom();
+  }
+
+  function download(href, fn) {
+    const a = document.createElement('a');
+    document.body.appendChild(a);
+    a.href = href;
+    a.download = fn;
+    a.click();
+    document.body.removeChild(a);
+  }
+  function saveImage() {
+    download(currentImage.src, imageFilename);
+  }
+  async function saveProj() {
+    const srcFile = await new Promise(r => {
+      const reader = new FileReader();
+      reader.onload = () => r(reader.result);
+      reader.readAsDataURL(new Blob([originalFile], { type: imageMime }));
+    });
+    const projectData = {
+      version: 1,
+      srcFile,
+      imageFilename,
+      modificationHistory,
+    }
+    const projectBlob = new Blob([JSON.stringify(projectData)], { type: "text/json" });
+    download(window.URL.createObjectURL(projectBlob), imageFilename + ".arrupt");
+  }
+  async function loadProj(proj) {
+    const projectData = JSON.parse(await proj.text());
+    if (typeof projectData?.srcFile !== 'string') return;
+    if (typeof projectData?.imageFilename !== 'string') return;
+    if (typeof projectData?.modificationHistory !== 'object') return;
+    if (!projectData.srcFile.startsWith("data:")) return;
+    const resp = await fetch(projectData.srcFile);
+    const cont = await resp.blob();
+    await loadImage(cont);
+    imageFilename = projectData.imageFilename;
+    modificationHistory = projectData.modificationHistory;
+    applyModifications();
+    setStatus(`loaded project!`);
   }
 
   function applyModifications() {
@@ -281,7 +492,7 @@
       if (!modification[2])
         corruptedTemp[modification[0]] = modification[1];
     }
-    healPNG(corruptedTemp);
+    processImageFormat(corruptedTemp);
     currentCorruptedFile = corruptedTemp;
     currentCorruptedImage.src = arr2img(corruptedTemp);
     currentFile = currentCorruptedFile;
@@ -317,8 +528,11 @@
     return mouseDataIndex;
   }
 
+  function randomByte() {
+    return Math.floor(Math.random()*256);
+  }
 
-  function corrupt() {
+  function corrupt(dir) {
     if (!currentFile) return;
     const mouseDataIndex = getMouseDataIndex();
     if (mouseDataIndex === -1) {
@@ -331,20 +545,40 @@
       }
       return;
     }
+    lastEditIndex = -1;
+    errorStackIndex += dir;
+    if (mouseDataIndex != errorStackPos) {
+      errorStackPos = mouseDataIndex;
+      errorStackIndex = 0;
+      errorStack = [randomByte()];
+    } else if (errorStackIndex >= errorStack.length) {
+      errorStack.push(randomByte());
+    } else if (errorStackIndex < 0) {
+      errorStackIndex = 0;
+      errorStack.unshift(randomByte());
+    }
 
     const corruptedTemp = new Uint8Array(new ArrayBuffer(currentFile.byteLength));
     corruptedTemp.set(new Uint8Array(currentFile));
     // beep("square", 1000 + corruptedTemp[mouseDataIndex]*4, 1, 0.1);
-    const randByte = Math.floor(Math.random()*256);
+    const randByte = errorStack[errorStackIndex];
     corruptedTemp[mouseDataIndex] = randByte;
     currentModification = [mouseDataIndex, randByte, false];
     document.querySelector(".currentEntry").innerText = mod2txt(currentModification);
-    healPNG(corruptedTemp);
+    processImageFormat(corruptedTemp);
 
     const tempCorruptedImage = new Image();
-    tempCorruptedImage.onerror = () => lastWasError = true;
+    tempCorruptedImage.onerror = () => {
+      if (!lastWasError) {
+        setStatus(`Can't render image, too corrupted :c`, "#FAA");
+        lastWasError = true;
+      }
+    }
     tempCorruptedImage.onload = () => {
-      lastWasError = false;
+      if (lastWasError) {
+        clearStatus();
+        lastWasError = false;
+      }
       if (currentModification == null) return;
       currentCorruptedImage = tempCorruptedImage;
       currentCorruptedFile = corruptedTemp;
@@ -389,11 +623,12 @@
   }
 
   function mod2txt(mod) {
-    if (!mod) return "";
+    if (!mod) return "\u200b";
     return `${mod[0].toString(16).padStart(6, '0')} > ${mod[1].toString(16).padStart(2, '0')}`.replace(/f/g, "f\u200b");
   }
 
   function updateDom() {
+    lastEditIndex = -1;
     sidebarDiv.innerText = "";
     let i = 0;
     for (const modification of [...modificationHistory, currentModification] ) {
@@ -410,6 +645,9 @@
         const delBtn = document.createElement("button");
         editBtn.innerText = "edit";
         editBtn.onclick = () => editEntry(entryIndex);
+        editBtn.onwheel = (e) => editEntryScroll(entryIndex, (e.deltaY < 0 ? 1 : -1)*(shiftDown ? 4 : 1));
+        editBtn.onmouseenter = () => lastEditIndex = entryIndex;
+        editBtn.onmouseleave = () => lastEditIndex = -1;
         visBtn.innerText = modification[2] ? "show" : "hide";
         visBtn.onclick = () => visEntry(entryIndex);
         delBtn.innerText = "x";
@@ -423,16 +661,19 @@
     }
     const help = document.createElement("div");
     help.classList.add("help");
-    help.innerText = `
+    help.innerText = `\
 Move your mouse over the raw data to corrupt parts of the image.
 Once you find a corruption you like, click on it to apply it.
 
 Scroll - Change current corruption
 Arrow keys - Same thing
-Shift - Adjust a zoomed in part`
+Shift - Adjust a zoomed in part`;
     sidebarDiv.appendChild(help);
+    if (modificationHistory.length && sidebarDiv.scrollHeight > sidebarDiv.clientHeight)
+      sidebarDiv.removeChild(help);
   }
 
+  let lastDelta = 0;
   function render(delta) {
     try {
     const layout = getLayout();
@@ -468,7 +709,7 @@ Shift - Adjust a zoomed in part`
       const mouseDataIndex = getMouseDataIndex();
       
 
-      const data = myImageData.data;
+      const data = myImageData.data;/*
       for (let i = 0; i < (pixelCount/yReduce); i++) {
         for (let yr = 0; yr < yReduce/yFactor; yr++) {
           const i2 = Math.floor(i*yFactor);
@@ -478,6 +719,10 @@ Shift - Adjust a zoomed in part`
           for (let j = 0; j < 3; j++) {
             const dataIndex = Math.floor((i*yReduce*3+j)*(dataCount/pixelCount/3)) + (shiftDown ? zoomOffset : 0);
             data[pix+j] = currentFile[dataIndex];
+            if (fileChunks.includes(dataIndex)) {
+              data[pix+2] = 255;
+              data[pix+1] = 0;
+            }
             if (mouseDataIndex == Math.floor((i*yReduce)*(dataCount/pixelCount)) + (shiftDown ? zoomOffset : 0)) {
               data[pix] = 255;
               data[pix+1] = 0;
@@ -485,19 +730,67 @@ Shift - Adjust a zoomed in part`
           }
           data[pix+3] = 255;
         }
-        
+      }*/
+      const iterCount = Math.min(dataCount, pixelCount);
+      const lotsOfData = dataCount > pixelCount;
+      const xReduce = lotsOfData ? 1 : Math.ceil(pixelCount/dataCount/yReduce);
+      for (let v = 0; v < iterCount; v++) {
+        const i = Math.ceil((v/iterCount)*(pixelCount/yReduce));
+        const i2 = Math.floor(i*yFactor);
+        const x = i2%touchArea[2];
+        const y = Math.floor(i2/touchArea[2]);
+        let dataIndex = Math.floor((i*yReduce)*(dataCount/pixelCount)) + (shiftDown ? zoomOffset : 0);
+        let currentData;
+        if (!lotsOfData) {
+          currentData = currentFile[dataIndex];
+        }
+        const mDataIndex = Math.floor((i*yReduce)*(dataCount/pixelCount)) + (shiftDown ? zoomOffset : 0);
+        const isPngChunk = fileChunks.includes(dataIndex);
+        for (let xr = 0; xr < xReduce; xr++) {
+          for (let yr = 0; yr < yReduce/yFactor; yr++) {
+            let cY = y;
+            let cX = x+xr;
+            if (cX >= touchArea[2]) {
+              cX -= touchArea[2];
+              cY += 1;
+            }
+            const pix =(cX+Math.floor((cY*yReduce/yFactor+yr))*touchArea[2])*4;
+            for (let j = 0; j < 3; j++) {
+              if (lotsOfData) {
+                dataIndex = Math.floor((i*yReduce*3+j)*(dataCount/pixelCount/3)) + (shiftDown ? zoomOffset : 0);
+                data[pix+j] = currentFile[dataIndex];
+              } else {
+                data[pix+j] = currentData;
+              }
+            }
+            if (isPngChunk) {
+              data[pix+1] = Math.max(0, data[pix+2] - 128);
+              data[pix+2] = data[pix+2] + 128 % 256;
+            }
+            if (mouseDataIndex == mDataIndex) {
+              data[pix] = 255;
+              data[pix+1] = 0;
+            }
+            data[pix+3] = 255;
+          }
+        }
       }
-      ctx.putImageData(myImageData, touchArea[0], touchArea[1]);
-    }
 
-    if (lastWasError) {
-      ctx.fillStyle = "red";
-      ctx.fillRect(8,8,16,16);
+      ctx.putImageData(myImageData, touchArea[0], touchArea[1]);
+      if (zoomProgress < 1 && delta) {
+        const zoomMult = 0.05*(Math.pow(1 - zoomProgress, 5))*(shiftDown ? 1 : -1);
+        if (zoomMult) {
+          ctx.drawImage(ctx.canvas, lastMouseX*zoomMult, lastMouseY*zoomMult, ctx.canvas.width*(1-zoomMult), ctx.canvas.height*(1-zoomMult));
+        }
+        zoomProgress += (delta-lastDelta)/100;
+      }
+      
     }
     } catch (e) {
       console.error(e);
     }
 
+    if (delta > 0) lastDelta = delta;
     if (delta !== -1)
       requestAnimationFrame(render);
   }
@@ -508,7 +801,7 @@ Shift - Adjust a zoomed in part`
     window.addEventListener('click', handleMouseClick, false);
     window.addEventListener('keydown', handleKeyDown, false);
     window.addEventListener('keyup', handleKeyUp, false);
-    window.addEventListener('wheel', corrupt, false);
+    window.addEventListener('wheel', handleMouseWheel, false);
     resizeCanvas();
     updateDom();
     requestAnimationFrame(render);
@@ -517,6 +810,7 @@ Shift - Adjust a zoomed in part`
       const resp = await fetch("default.png");
       const cont = await resp.blob();
       loadImage(cont);
+      setStatus(`hi friend!`);
     })()
   };
 </script>
