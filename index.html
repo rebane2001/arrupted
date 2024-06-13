@@ -269,14 +269,14 @@
       fileChunks = [];
       let pointer = 8;
       while (pointer < arr.length) {
-        fileChunks.push(pointer);
-        fileChunks.push(pointer+1);
-        fileChunks.push(pointer+2);
-        fileChunks.push(pointer+3);
-        fileChunks.push(pointer+4);
-        fileChunks.push(pointer+5);
-        fileChunks.push(pointer+6);
-        fileChunks.push(pointer+7);
+        fileChunks[pointer] = true;
+        fileChunks[pointer+1] = true;
+        fileChunks[pointer+2] = true;
+        fileChunks[pointer+3] = true;
+        fileChunks[pointer+4] = true;
+        fileChunks[pointer+5] = true;
+        fileChunks[pointer+6] = true;
+        fileChunks[pointer+7] = true;
         u8.set(arr.slice(pointer,pointer+4));
         const chunkLen = dv.getUint32(0);
         pointer += 4;
@@ -290,10 +290,10 @@
         } else {
           pointer += chunkLen+4;
         }
-        fileChunks.push(pointer);
-        fileChunks.push(pointer+1);
-        fileChunks.push(pointer+2);
-        fileChunks.push(pointer+3);
+        fileChunks[pointer] = true;
+        fileChunks[pointer+1] = true;
+        fileChunks[pointer+2] = true;
+        fileChunks[pointer+3] = true;
         pointer += 4;
       }
       return true;
@@ -310,12 +310,12 @@
       fileChunks = [];
       let pointer = 2;
       while (pointer < arr.length) {
-        fileChunks.push(pointer);
-        fileChunks.push(pointer+1);
+        fileChunks[pointer] = true;
+        fileChunks[pointer+1] = true;
         if (arr[pointer] != 0xFF) break;
         if (arr[pointer+1] == 0xDA) break;
-        fileChunks.push(pointer+2);
-        fileChunks.push(pointer+3);
+        fileChunks[pointer+2] = true;
+        fileChunks[pointer+3] = true;
         pointer += 2 + (arr[pointer+2]<<8) + arr[pointer+3];
       }
       return true;
@@ -351,7 +351,7 @@
         const isRiffOrList = (arr[pointer] == 0x52 && arr[pointer+1] == 0x49 && arr[pointer+2] == 0x46 && arr[pointer+3] == 0x46) || (arr[pointer] == 0x4C && arr[pointer+1] == 0x49 && arr[pointer+2] == 0x53 && arr[pointer+3] == 0x54);
         // console.log(String.fromCharCode(arr[pointer+0])+String.fromCharCode(arr[pointer+1])+String.fromCharCode(arr[pointer+2])+String.fromCharCode(arr[pointer+3]));
         for (let i = 0; i < 8; i++) {
-          fileChunks.push(pointer+i);
+          fileChunks[pointer+i] = true;
         }
         pointer += 4;
         u8.set(arr.slice(pointer,pointer+4));
@@ -721,7 +721,7 @@ Processing is done locally, no data is sent to the server.`;
           currentData = currentFile[dataIndex];
         }
         const mDataIndex = Math.floor((i*yReduce)*(dataCount/pixelCount)) + (shiftDown ? zoomOffset : 0);
-        const isPngChunk = fileChunks.includes(dataIndex);
+        const isPngChunk = fileChunks[dataIndex];
         for (let xr = 0; xr < xReduce; xr++) {
           for (let yr = 0; yr < yReduce/yFactor; yr++) {
             let cY = y;
@@ -765,7 +765,6 @@ Processing is done locally, no data is sent to the server.`;
     } catch (e) {
       console.error(e);
     }
-
     if (delta > 0) lastDelta = delta;
     if (delta !== -1)
       requestAnimationFrame(render);
