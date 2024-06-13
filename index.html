@@ -260,6 +260,8 @@
       if (arr[2] != 78) return;
       if (arr[3] != 71) return;
 
+      const modifiedBytes = [...modificationHistory, currentModification].filter(e=>e&&!e[2]).map(e=>e[0]);
+
       const buff = new ArrayBuffer(4);
       const u8 = new Uint8Array(buff);
       const dv = new DataView(buff);
@@ -279,14 +281,19 @@
         const chunkLen = dv.getUint32(0);
         pointer += 4;
         if (pointer+chunkLen+4 >= arr.length) break;
-        const crcRes = rawCRC(arr.slice(pointer,pointer+chunkLen+4));
-        dv.setUint32(0, crcRes);
-        pointer += chunkLen+4;
+        // only calculate CRC if necessary
+        if (modifiedBytes.find(b=>b>=pointer-8&&b<pointer+chunkLen+4+4)) {
+          const crcRes = rawCRC(arr.slice(pointer,pointer+chunkLen+4));
+          dv.setUint32(0, crcRes);
+          pointer += chunkLen+4;
+          arr.set(u8, pointer);
+        } else {
+          pointer += chunkLen+4;
+        }
         fileChunks.push(pointer);
         fileChunks.push(pointer+1);
         fileChunks.push(pointer+2);
         fileChunks.push(pointer+3);
-        arr.set(u8, pointer);
         pointer += 4;
       }
       return true;
@@ -392,8 +399,8 @@
   let zoomAmount = 1;
   let zoomProgress = 1;
   function calculateZoomOffset() {
-    const mouseDataIndex = getMouseDataIndex();
-    const touchArea = getTouchArea();
+    const touchArea = getLayout().glitchbox;
+    const mouseDataIndex = getMouseDataIndex(touchArea);
     const pixelCount = touchArea[2]*touchArea[3];
     if (currentFile.length < 128) {
       zoomOffset = 0;
@@ -405,7 +412,7 @@
       zoomAmount *= 2;
     zoomOffset = 0;
     shiftDown = true;
-    const zoomedMouseDataIndex = getMouseDataIndex();
+    const zoomedMouseDataIndex = getMouseDataIndex(touchArea);
     const zoomedDataCount = Math.floor(pixelCount/zoomAmount);
     zoomOffset = mouseDataIndex - zoomedMouseDataIndex;
     zoomOffset = Math.min(Math.max(zoomOffset, 0), currentFile.length-zoomedDataCount);
@@ -514,8 +521,8 @@
     }
   }
 
-  function getMouseDataIndex() {
-    const touchArea = getTouchArea();
+  function getMouseDataIndex(existingTouchArea) {
+    const touchArea = existingTouchArea || getLayout().glitchbox;
     const pixelCount = touchArea[2]*touchArea[3];
     const dataCount = shiftDown ? Math.min(currentFile.length, Math.floor(pixelCount/zoomAmount)) : currentFile.length;
     const mouseInnerX = lastMouseX - touchArea[0];
@@ -585,10 +592,6 @@
       overlayImg.src = currentCorruptedImage.src;
     };
     tempCorruptedImage.src = arr2img(corruptedTemp);
-  }
-
-  function getTouchArea() {
-    return getLayout().glitchbox;
   }
 
   let imageRatio = 1;
@@ -677,6 +680,7 @@ Processing is done locally, no data is sent to the server.`;
   function render(delta) {
     try {
     const layout = getLayout();
+    const touchArea = layout.glitchbox;
 
     ctx.fillStyle = "white";
     ctx.fillStyle = "#FFF1";
@@ -694,13 +698,12 @@ Processing is done locally, no data is sent to the server.`;
       ctx.drawImage(currentImage, 0, 0, ctx.canvas.width, ctx.canvas.height);
     }
     if (currentFile) {
-      const touchArea = getTouchArea();
       const pixelCount = touchArea[2]*touchArea[3];
       const dataCount = shiftDown ? Math.min(currentFile.length, Math.floor(pixelCount/zoomAmount)) : currentFile.length;
       const yReduce = Math.floor(Math.sqrt(pixelCount/dataCount)) || 1;
       const yFactor = Math.floor(touchArea[3]/yReduce)/(touchArea[3]/yReduce);
       const rawImageData = ctx.createImageData(touchArea[2], touchArea[3]);
-      const mouseDataIndex = getMouseDataIndex();
+      const mouseDataIndex = getMouseDataIndex(touchArea);
       
 
       const data = rawImageData.data;
