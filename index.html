@@ -125,6 +125,7 @@
 <div id="menubar"><h1>Arrupted</h1>
   <button onclick="imgInput.click()" onmouseenter="setStatus(`Open an image or project`)" onmouseleave="clearStatus()">OPEN</button>/
   <button onclick="saveImage()" onmouseenter="setStatus(`Save an image`)" onmouseleave="clearStatus()">SAVE</button>/
+  <button onclick="exportImage()" onmouseenter="setStatus(`Export as uncorrupted PNG`)" onmouseleave="clearStatus()">EXPORT</button>/
   <button onclick="saveProj()" onmouseenter="setStatus(`Save a project`)" onmouseleave="clearStatus()">PROJ</button>/
   <a onmouseenter="setStatus(`View source code on github`)" onmouseleave="clearStatus()" href="https://github.com/rebane2001/arrupted">GITHUB</a>/
   <a onmouseenter="setStatus(`Watch a tutorial video`)" onmouseleave="clearStatus()" href="https://www.youtube.com/watch?v=oT_pOlAG5yM">VIDEO</a>
@@ -465,6 +466,14 @@
   }
   function saveImage() {
     download(currentImage.src, imageFilename);
+  }
+  function exportImage() {
+    const exportCanvas = document.createElement('canvas');
+    const exportCtx = exportCanvas.getContext("2d");
+    exportCanvas.width = currentImage.width;
+    exportCanvas.height = currentImage.height;
+    exportCtx.drawImage(currentImage, 0, 0);
+    download(exportCanvas.toDataURL(), `${imageFilename}.png`);
   }
   async function saveProj() {
     const srcFile = await new Promise(r => {
